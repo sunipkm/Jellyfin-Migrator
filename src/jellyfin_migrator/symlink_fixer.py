@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import subprocess
 from typing import Iterable, List, Optional, Tuple
 import logging
 from dataclasses import dataclass, field
@@ -153,13 +154,13 @@ def remap_symlink(
         return
     if not real.exists():
         raise FileNotFoundError(f"Real path {real} does not exist")
+    os.system(f'rm "{fake}"')
     if fake.exists():
         if not overwrite:
             raise FileExistsError(f"Fake path {fake} already exists")
         else:
             logging.debug(f"Fake path {fake} already exists, overwriting")
-            fake.unlink()  # should always work because it is a NTFS symlink, which is a file in Linux
-    fake.symlink_to(real, target_is_directory=real.is_dir())
+    os.system(f'ln -s "{real}" "{fake}"')
 
 # %% Class to handle the generate command line argument
 
@@ -185,8 +186,8 @@ def symlink_fixer():
         'symlinks', type=str, help='Path to the database mapping (broken) NTFS symlinks to correct UNIX paths')
     parser.add_argument('config', type=Path,
                         help='Path to the configuration TOML file')
-    parser.add_argument('--execute', type=bool,
-                        help='Apply symlinks', default=False)
+    parser.add_argument('--execute',
+                        help='Apply symlinks', default=False, action='store_true')
     parser.add_argument('--debug', type=str,
                         help='Debug mode [DEBUG | INFO | WARNING | ERROR]', default='WARNING')
     parser.add_argument('--logfile', type=str,
@@ -219,14 +220,17 @@ def symlink_fixer():
     if not os.path.exists(args.config):
         raise FileNotFoundError(f"Config file {args.config} does not exist")
     # Load the configuration
-    config = SymlinkFixerConfig.from_toml(args.config)
+    with open(args.config, 'r') as f:
+        # Load the configuration from the TOML file
+        logging.info(f"Loading configuration from {args.config}")
+        config = SymlinkFixerConfig.from_toml(f)
 
     reals, fakes = import_symlinks(
-        'nipflix_symlinks.txt', args.fakeroot, args.realroot)
+        args.symlinks, config.fakeroot, config.realroot)
 
     for real, fake in tqdm(zip(reals, fakes), total=len(reals), desc='Creating symlinks'):
         try:
-            remap_symlink(real, fake, config.mapping, dry_run=dry_run)
+            remap_symlink(real, fake, config.mapping, dry_run=dry_run, overwrite=True)
         except Exception as e:
             # Log the error without newlines
             logging.warning(f"{e}".replace('\n', ' '))
