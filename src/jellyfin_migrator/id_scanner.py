@@ -18,7 +18,6 @@
 import sqlite3
 import binascii
 from multiprocessing import Pool
-import argparse
 
 
 ids = dict()
@@ -162,7 +161,7 @@ def check_bin_ids(job):
 
 # Scans a job (entire column) for occurrences of any ID in any string format.
 # Column entries can either be pure (just the ID string) or have an ID string
-# embedded into other stuff (JSON string f.ex.).
+# embedded into other stuff (JSON string e.g.).
 # The function also checks if more than one ID format is found within the column.
 def check_embedded_id_types(job):
     table, column, column_values, ids = job
@@ -205,7 +204,8 @@ def get_id_candidates(s):
     return column_type, result
 
 
-if __name__ == "__main__":
+def jellyfin_id_scanner():
+    import argparse
     desc = """
     Jellyfin ID Scanner - Searches through database files for occurences of jellyfin IDs
     Copyright (C) 2022  Max Zuidberg
@@ -218,7 +218,7 @@ if __name__ == "__main__":
     parser.add_argument("--library-db", type=str, required=True,
                         help="Path to Jellyfins library.db file. Always required")
     parser.add_argument("--scan-db", type=str, required=True,
-                        help="Path to the db file to scan. Can also be library.db or f.ex. a db file from a plugin. "
+                        help="Path to the db file to scan. Can also be library.db or e.g. a db file from a plugin. "
                              "Other file types are currently unsupported but should be easy to add. Always required")
 
     args = parser.parse_args()

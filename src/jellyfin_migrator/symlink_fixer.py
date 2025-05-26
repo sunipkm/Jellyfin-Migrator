@@ -14,19 +14,29 @@ from .argparse_override import override
 
 
 @dataclass
-class SymlinkFixerConfig(TOMLDataclass):
+class SymlinkFixerConfig(TOMLDataclass, doc_as_comment=True):
+    """Configuration for the symlink fixer.
+
+This file processes symlinks (intended to be NTFS symlinks created with `mklink` without the `/j` flag) 
+found using `ls -lR /path/to/folder | grep '^l'` in WSL, and on a UNIX system, recreates them as UNIX symlinks.
+
+`realroot` and `fakeroot` are parts of the path in the output of the `find` command that are removed from the
+target and symlink paths, respectively, to resolve the Windows drive letter.
+
+The `mapping` dictionary maps drive letters on Windows to their corresponding UNIX paths. 
+"""
     mapping: dict[str, Path] = field(
         metadata={'doc': 'Mapping of drive letters to UNIX paths.'}
     )
     fakeroot: Optional[str] = field(
         default=None,
         metadata={
-            'doc': 'Root path to make the fake path relative to. Defaults to None.'}
+            'doc': 'Root path to make the fake path (symlink) relative to. Defaults to None.'}
     )
     realroot: Optional[str] = field(
         default='/mnt',
         metadata={
-            'doc': 'Root path to make the real path relative to. Defaults to /mnt.'}
+            'doc': 'Root path to make the real path (target) relative to. Defaults to /mnt.'}
     )
 
 

@@ -17,6 +17,7 @@ dependencies = ["tqdm", "fancy_dataclass"]
 [project.scripts]
 jellyfin-migrator = "jellyfin_migrator:program_main"
 jellyfin-symlink-fixer = "jellyfin_migrator.symlink_fixer:symlink_fixer"
+jellyfin-id-scanner = "jellyfin_migrator.id_scanner:jellyfin_id_scanner"
 
 
 [tool.setuptools]

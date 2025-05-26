@@ -18,6 +18,7 @@
 from functools import partial
 import math
 import pathlib
+from pprint import pformat
 import sqlite3
 import json
 import hashlib
@@ -53,6 +54,29 @@ path_replacements = dict()
 fs_path_replacements = dict()
 
 
+def pool_init_globals(globals: dict):
+    global original_root, source_root, target_root, path_replacements, fs_path_replacements, library_db_target_path, library_db_source_path
+    original_root = globals.get("original_root", Path())
+    source_root = globals.get("source_root", Path())
+    target_root = globals.get("target_root", Path())
+    path_replacements = globals.get("path_replacements", dict())
+    fs_path_replacements = globals.get("fs_path_replacements", dict())
+    library_db_target_path = globals.get("library_db_target_path", Path())
+    library_db_source_path = globals.get("library_db_source_path", Path())
+
+
+def get_globals() -> dict:
+    return {
+        "original_root": original_root,
+        "source_root": source_root,
+        "target_root": target_root,
+        "path_replacements": path_replacements,
+        "fs_path_replacements": fs_path_replacements,
+        'library_db_target_path': library_db_target_path,
+        'library_db_source_path': library_db_source_path,
+    }
+
+
 class DisableLogger():
     def __enter__(self):
         logging.disable(logging.CRITICAL)
@@ -67,7 +91,6 @@ def partition(obj: list, num: int = 2000):
     k, m = divmod(len(obj), num)
     for i in range(k):
         yield obj[i*num+min(num, m):(i+1)*num+min(num, m)]
-
 
 
 # Since library.db will be needed throughout the process, its location is stored
@@ -723,7 +746,7 @@ def process_files(lst: list, process_func, replace_func, path_replacements):
                     CHUNK_SIZE = 2000
                     srcglobs = partition(srcglob, CHUNK_SIZE)  # partition
                     srcglobs_len = math.ceil(srcglob_len / CHUNK_SIZE)
-                    with Pool() as mpool:
+                    with Pool(initializer=pool_init_globals, initargs=(get_globals(),)) as mpool:
                         for srcglob in tqdm(srcglobs, total=srcglobs_len):
                             donelist = mpool.map(
                                 evalfunc, srcglob, chunksize=100)
@@ -920,7 +943,7 @@ def jf_date_str_to_python_ns(s: str):
     if "." in s:
         s, subseconds = s.rsplit(".", 1)
     # In case subseconds has a higher resolution than 100ns and/or additional
-    # information (f.ex. timezone, which is known to be UTC+00:00 for jellyfin),
+    # information (e.g. timezone, which is known to be UTC+00:00 for jellyfin),
     # Strip all of it.
     # Add trailing zeros til the ns digit, then convert to int, and we have ns.
     subseconds = int(subseconds.split(
@@ -1028,7 +1051,7 @@ def update_file_dates(parallel: bool = False):
             outs = []
             proc = partial(
                 update_file_date_proc, fs_path_replacements=fs_path_replacements, target_root=target_root)
-            with Pool() as mpool:
+            with Pool(initializer=pool_init_globals, initargs=(get_globals(),)) as mpool:
                 for rows in tqdm(rows_part, total=num_rows_part):
                     out = mpool.map(proc, rows, chunksize=100)
                     outs += out
@@ -1103,19 +1126,26 @@ def program_main():
         description="Jellyfin Database Migration Tool",
     )
     parser.add_argument('config', type=Path, help="Path to the config file")
-    parser.add_argument('--source_root', type=Path,
+    parser.add_argument('--source', type=Path,
                         help="Path to the Jellyfin data root directory (ideally, a copy of C:\\ProgramData\\Jellyfin)")
-    parser.add_argument('--target_root', type=Path, help="Path to the target Jellyfin data root directory converted to linux",
+    parser.add_argument('--target', type=Path, help="Path to the target Jellyfin data root directory converted to linux",
                         default=Path(os.getcwd()) / f"Jellyfin_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')}")
-    parser.add_argument('--logfile', type=Path, default=Path(os.getcwd()) /
-                        'jellyfin_migration.log', help='Path to the log file')
+    parser.add_argument('--debug', action='store_true', default=False,
+                        help="Enable debug logging")
+    parser.add_argument('--logfile', type=Path, default=None,
+                        help='Path to the log file')
     parser.add_argument('--parallel', action='store_true', default=False,
                         help="Use multiprocessing for processing files. This is recommended for large migrations, but WILL cause issues on hard drives.")
-    parser.add_argument('--generate', type=Path, action=override(generate_default))
+    parser.add_argument('--generate', type=Path,
+                        action=override(generate_default))
     args = parser.parse_args()
     # Set up logging
     print("")
     # Set up logging
+    if args.logfile is None:
+        cfgfile: Path = args.config
+        stem = cfgfile.stem
+        args.logfile = Path(os.getcwd()) / f"{stem}_migration.log"
     root_logger = logging.getLogger()
     log_file_handle = logging.FileHandler(
         args.logfile, mode='w', encoding='utf8', errors='surrogateescape')  # log file
@@ -1126,13 +1156,25 @@ def program_main():
     # Parse the config file
     with open(args.config) as f:
         config = MigrationConfig.from_toml(f)
-    original_root = Path(config.windows_root_path)
-    source_root = args.source_root
-    target_root = args.target_root
+    original_root = Path(config.windows.root)
+    source_root = args.source
+    target_root = args.target
+    if source_root == target_root:
+        logging.error("Source and target data paths are the same! This is not allowed. Please specify different paths.")
+        exit(1)
     path_replacements = config._get_path_replacements()
     fs_path_replacements = config._get_fs_path_replacements()
+    if args.debug:
+        logging.info('Debug mode enabled')
+        logging.info(f'Using source root: {source_root}')
+        logging.info(f'Using target root: {target_root}')
+        logging.info(f'Using original root: {original_root}')
+        logging.info(f'Using path replacements: {pformat(path_replacements)}')
+        logging.info(
+            f'Using fs_path_replacements: {pformat(fs_path_replacements)}')
+        input("\n\nPress Enter to continue or CTRL+C to abort.\n")
     # Set up the replacements dict for the paths
-    
+
     # The To-Do Lists: todo_list_paths, todo_list_id_paths and todo_list_ids.
     # If your installation is like mine, you don't need to change the following three todo_lists.
     # They contain which files should be modified and how.
@@ -1161,103 +1203,103 @@ def program_main():
     #   Search for "ID types occurring in paths" to find the place in the code
     #   where you can select the types to include.
     todo_list_paths = [
-    {
-        "source": source_root / "data/library.db",
-        # Usually you want to leave this on auto. If you want to work on the source file, set it to the same path (YOU SHOULDN'T!).
-        "target": "auto",
-        # Usually same for all but you could specify a specific one per db.
-        "replacements": path_replacements,
-        "tables": {
-            "TypedBaseItems": {        # Name of the table within the SQLite database file
-                "path_columns": [      # All column names that can contain paths.
-                    "path",
-                ],
-                "jf_image_columns": [  # All column names that can jellyfins "image paths mixed with image properties" strings.
-                    "Images",
-                ],
-                "json_columns": [      # All column names that can contain json data with paths.
-                    "data",
-                ],
-            },
-            "mediastreams": {
-                "path_columns": [
-                    "Path",
-                ],
-            },
-            "Chapters2": {
-                "jf_image_columns": [
-                    "ImagePath",
-                ],
-            },
-        },
-    },
-    {
-        "source": source_root / "data/jellyfin.db",
-        "target": "auto",
-        "replacements": path_replacements,
-        "tables": {
-            "ImageInfos": {
-                "path_columns": [
-                    "Path",
-                ],
+        {
+            "source": source_root / "data/library.db",
+            # Usually you want to leave this on auto. If you want to work on the source file, set it to the same path (YOU SHOULDN'T!).
+            "target": "auto",
+            # Usually same for all but you could specify a specific one per db.
+            "replacements": path_replacements,
+            "tables": {
+                "TypedBaseItems": {        # Name of the table within the SQLite database file
+                    "path_columns": [      # All column names that can contain paths.
+                        "path",
+                    ],
+                    "jf_image_columns": [  # All column names that can jellyfins "image paths mixed with image properties" strings.
+                        "Images",
+                    ],
+                    "json_columns": [      # All column names that can contain json data with paths.
+                        "data",
+                    ],
+                },
+                "mediastreams": {
+                    "path_columns": [
+                        "Path",
+                    ],
+                },
+                "Chapters2": {
+                    "jf_image_columns": [
+                        "ImagePath",
+                    ],
+                },
             },
         },
-    },
-    # Copy all other .db files. Since it's copy-only (no path adjustments), omit the log output.
-    {
-        "source": source_root / "data/*.db",
-        "target": "auto",
-        "replacements": path_replacements,
-        "copy_only": True,
-        "no_log": True,
-    },
+        {
+            "source": source_root / "data/jellyfin.db",
+            "target": "auto",
+            "replacements": path_replacements,
+            "tables": {
+                "ImageInfos": {
+                    "path_columns": [
+                        "Path",
+                    ],
+                },
+            },
+        },
+        # Copy all other .db files. Since it's copy-only (no path adjustments), omit the log output.
+        {
+            "source": source_root / "data/*.db",
+            "target": "auto",
+            "replacements": path_replacements,
+            "copy_only": True,
+            "no_log": True,
+        },
 
-    {
-        "source": source_root / "plugins/**/*.json",
-        "target": "auto",
-        "replacements": path_replacements,
-    },
+        {
+            "source": source_root / "plugins/**/*.json",
+            "target": "auto",
+            "replacements": path_replacements,
+        },
 
-    {
-        "source": source_root / "config/*.xml",
-        "target": "auto",
-        "replacements": path_replacements,
-    },
+        {
+            "source": source_root / "config/*.xml",
+            "target": "auto",
+            "replacements": path_replacements,
+        },
 
-    {
-        "source": source_root / "metadata/**/*.nfo",
-        "target": "auto",
-        "replacements": path_replacements,
-    },
+        {
+            "source": source_root / "metadata/**/*.nfo",
+            "target": "auto",
+            "replacements": path_replacements,
+        },
 
-    {
-        # .xml, .mblink, .collection files are here.
-        "source": source_root / "root/**/*.*",
-        "target": "auto",
-        "replacements": path_replacements,
-    },
+        {
+            # .xml, .mblink, .collection files are here.
+            "source": source_root / "root/**/*.*",
+            "target": "auto",
+            "replacements": path_replacements,
+        },
 
-    {
-        "source": source_root / "data/collections/**/collection.xml",
-        "target": "auto",
-        "replacements": path_replacements,
-    },
+        {
+            "source": source_root / "data/collections/**/collection.xml",
+            "target": "auto",
+            "replacements": path_replacements,
+        },
 
-    {
-        "source": source_root / "data/playlists/**/playlist.xml",
-        "target": "auto",
-        "replacements": path_replacements,
-    },
+        {
+            "source": source_root / "data/playlists/**/playlist.xml",
+            "target": "auto",
+            "replacements": path_replacements,
+        },
 
-    # Lastly, copy anything that's left. Any file that's already been processed/copied is skipped
-    # ... you should delete the cache and the logs though.
-    {
-        "source": source_root / "**/*.*",
-        "target": "auto",
-        "replacements": path_replacements,
-        "copy_only": True,
-        "no_log": True,
-    },
+        # Lastly, copy anything that's left. Any file that's already been processed/copied is skipped
+        # ... you should delete the cache and the logs though.
+        {
+            "source": source_root / "**/*.*",
+            "target": "auto",
+            "replacements": path_replacements,
+            "copy_only": True,
+            "no_log": True,
+        },
     ]
 
     # See comment from todo_list_paths for details about this todo_list.
@@ -1448,7 +1490,6 @@ def program_main():
             },
         },
     ]
-
 
     # Copy relevant files and adjust all paths to the new locations.
     logging.info("Processing main paths")
