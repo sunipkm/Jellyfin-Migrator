@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jellyfin_migrator"
+version = "0.0.1"
+authors = [
+    { name = "Max Zuidberg" },
+    { name = "Sunip Mukherjee", email = "sunipkmukherjee@gmail.com" },
+]
+license = { file = "LICENSE" }
+description = "A tool to migrate Jellyfin data from a Windows server to a Linux server."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "tqdm",
+]
+scripts = { jellyfin-migrator = "jellyfin_migrator:program_main" }
+
+[tool.setuptools]
+# https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html
+platforms = ["Windows"]
+include-package-data = true
+zip-safe = true
