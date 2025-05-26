@@ -15,6 +15,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "tqdm",
+    "fancy_dataclass",
 ]
 scripts = { jellyfin-migrator = "jellyfin_migrator:program_main" }
 
