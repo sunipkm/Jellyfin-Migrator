@@ -27,6 +27,8 @@ from pathlib import Path
 from shutil import copy
 from tqdm import tqdm
 import logging
+
+from .argparse_override import override
 from .id_scanner import *
 from .config import *
 import datetime
@@ -1109,6 +1111,7 @@ def program_main():
                         'jellyfin_migration.log', help='Path to the log file')
     parser.add_argument('--parallel', action='store_true', default=False,
                         help="Use multiprocessing for processing files. This is recommended for large migrations, but WILL cause issues on hard drives.")
+    parser.add_argument('--generate', type=Path, action=override(generate_default))
     args = parser.parse_args()
     # Set up logging
     print("")

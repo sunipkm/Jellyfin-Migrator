@@ -1,5 +1,6 @@
 # %%
 from __future__ import annotations
+import argparse
 import os
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
@@ -7,6 +8,8 @@ import logging
 from dataclasses import dataclass, field
 from fancy_dataclass import TOMLDataclass
 from tqdm import tqdm
+
+from .argparse_override import override
 # %% Define the configuration dataclass
 
 
@@ -14,6 +17,16 @@ from tqdm import tqdm
 class SymlinkFixerConfig(TOMLDataclass):
     mapping: dict[str, Path] = field(
         metadata={'doc': 'Mapping of drive letters to UNIX paths.'}
+    )
+    fakeroot: Optional[str] = field(
+        default=None,
+        metadata={
+            'doc': 'Root path to make the fake path relative to. Defaults to None.'}
+    )
+    realroot: Optional[str] = field(
+        default='/mnt',
+        metadata={
+            'doc': 'Root path to make the real path relative to. Defaults to /mnt.'}
     )
 
 
@@ -70,6 +83,8 @@ def import_symlinks(fname: str, fakeroot: Optional[str] = None, realroot: Option
     ### Returns:
         - `Tuple[List[Tuple[str, Path]], List[Tuple[str, Path]]]`: Tuple of real and fake paths. Each path is a tuple of the drive letter and the path to the drive root. 
     """
+    logging.info(
+        f"Importing symlinks from {fname} with fakeroot={fakeroot} and realroot={realroot}")
     lines = open(fname, 'r').readlines()  # Read the file
     lines = [line.rstrip() for line in lines]  # Remove trailing whitespace
     fakes = []  # List of fake paths
@@ -146,13 +161,28 @@ def remap_symlink(
             fake.unlink()  # should always work because it is a NTFS symlink, which is a file in Linux
     fake.symlink_to(real, target_is_directory=real.is_dir())
 
+# %% Class to handle the generate command line argument
+
+
+def generate_config(values: Path) -> None:
+    config = SymlinkFixerConfig(mapping={'a': Path('/media/user/path_a')})
+    loc = Path(values)  # type: ignore
+    if loc.exists():  # type: ignore
+        logging.error(
+            f"Configuration file {values} already exists. Please remove it before generating a new one.")
+        return
+    with open(loc, 'w') as f:
+        config.to_toml(f)
+    logging.info(f"Generated configuration file at {loc}")
+
 
 # %%
 def symlink_fixer():
     import argparse
     parser = argparse.ArgumentParser(
         description='Remap symlinks from one drive to another.')
-    parser.add_argument('symlinks', type=str, help='Path to the symlink file')
+    parser.add_argument(
+        'symlinks', type=str, help='Path to the database mapping (broken) NTFS symlinks to correct UNIX paths')
     parser.add_argument('config', type=Path,
                         help='Path to the configuration TOML file')
     parser.add_argument('--execute', type=bool,
@@ -161,6 +191,8 @@ def symlink_fixer():
                         help='Debug mode [DEBUG | INFO | WARNING | ERROR]', default='WARNING')
     parser.add_argument('--logfile', type=str,
                         help='Log file path', default='symlink_fixer.log')
+    parser.add_argument('--generate', type=Path, action=override(generate_config), default=None,
+                        help='Generate a blank configuration file')
     # Parse the arguments
     args = parser.parse_args()
     # Check if the symlink file exists
@@ -189,13 +221,15 @@ def symlink_fixer():
     # Load the configuration
     config = SymlinkFixerConfig.from_toml(args.config)
 
-    reals, fakes = import_symlinks('nipflix_symlinks.txt')
+    reals, fakes = import_symlinks(
+        'nipflix_symlinks.txt', args.fakeroot, args.realroot)
 
     for real, fake in tqdm(zip(reals, fakes), total=len(reals), desc='Creating symlinks'):
         try:
             remap_symlink(real, fake, config.mapping, dry_run=dry_run)
         except Exception as e:
-            logging.warning(f"{e}".replace('\n', ' '))  # Log the error without newlines
+            # Log the error without newlines
+            logging.warning(f"{e}".replace('\n', ' '))
 
 
 # %%
