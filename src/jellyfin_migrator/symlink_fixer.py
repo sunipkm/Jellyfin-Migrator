@@ -3,6 +3,29 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
+import logging
+from dataclasses import dataclass, field
+from fancy_dataclass import TOMLDataclass
+from tqdm import tqdm
+# %% Define the configuration dataclass
+
+
+@dataclass
+class SymlinkFixerConfig(TOMLDataclass):
+    mapping: dict[str, Path] = field(
+        metadata={'doc': 'Mapping of drive letters to UNIX paths.'}
+    )
+
+
+# %% Set up logging
+log_formatter = logging.Formatter(
+    fmt='[%(asctime)s] [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+root_logger = logging.getLogger()  # get root logger
+stream_handler = logging.StreamHandler()  # this is stdout/stderr
+stream_handler.setLevel(logging.INFO)  # this only logs info and up
+stream_handler.setFormatter(log_formatter)
+root_logger.addHandler(stream_handler)  # add the log file handler
+root_logger.setLevel(logging.DEBUG)  # logger handles debug and up
 # %%
 
 
@@ -30,7 +53,8 @@ def convert_from_unix(fname: str | List[str], root: Optional[str] = None) -> Tup
         return (drive, path)
     elif isinstance(fname, Iterable):
         out = [convert_from_unix(f) for f in fname]
-        return list(filter(None, out))  # type: ignore filter out the invalid paths
+        # filter out the invalid paths
+        return list(filter(None, out))  # type: ignore
     else:
         raise TypeError(f'Unknown type {type(fname)}')
 
@@ -50,7 +74,7 @@ def import_symlinks(fname: str, fakeroot: Optional[str] = None, realroot: Option
     lines = [line.rstrip() for line in lines]  # Remove trailing whitespace
     fakes = []  # List of fake paths
     reals = []  # List of real paths
-    for line in lines:  # Iterate over the lines
+    for line in tqdm(lines, desc='Import symlinks'):  # Iterate over the lines
         # Discard the first 10 words of size, permissions, etc.
         line = line.split(maxsplit=10)[-1]
         # Split the remaining line by the symlink arrow
@@ -61,23 +85,21 @@ def import_symlinks(fname: str, fakeroot: Optional[str] = None, realroot: Option
             # The second part is the real path
             real = words[1].strip().replace('\\', '')
             # Convert the fake path to a Windows path
-            fdr, fake = convert_from_unix(fake, root=fakeroot) # type: ignore
+            fdr, fake = convert_from_unix(fake, root=fakeroot)  # type: ignore
             # Convert the real path to a Windows path
-            rdr, real = convert_from_unix(real, root=realroot) # type: ignore
-            # print(f'Symlink: "{fdr}:/{fake}" -> "{rdr}:/{real}"')
+            rdr, real = convert_from_unix(real, root=realroot)  # type: ignore
             fakes.append((fdr, fake))
             reals.append((rdr, real))
         else:
-            print(f"Invalid line: {line}")
+            logging.warning(f"Invalid line: {line}")
     return reals, fakes
 
 
 def remap_symlink(
-        real: Tuple[str, Path], # type: ignore
-        fake: Tuple[str, Path], # type: ignore
+        real: Tuple[str, Path],  # type: ignore
+        fake: Tuple[str, Path],  # type: ignore
         drive_map: dict[str, Path],
         dry_run: bool = False,
-        debug: bool = True,
         overwrite: bool = False
 ) -> None:
     """## Remap a windows symlink to a UNIX symlink.
@@ -87,7 +109,6 @@ def remap_symlink(
         - `fake (Tuple[str, Path])`: Path to the symlink.
         - `drive_map (dict[str, Path])`: Dictionary mapping drive letters to UNIX paths.
         - `dry_run (bool, optional)`: Dry run. Defaults to False.
-        - `debug (bool, optional)`: Debug. Defaults to True.
         - `overwrite (bool, optional)`: Actually remove the NTFS symlink. Defaults to False.
 
     ### Raises:
@@ -112,9 +133,8 @@ def remap_symlink(
     real: Path = real
     fake: Path = fake
     # Check if the real path exists
-    if debug or dry_run:
-        print(f"Symlink: {real} -> {fake}")
     if dry_run:
+        logging.info(f"Symlink: {real} -> {fake}")
         return
     if not real.exists():
         raise FileNotFoundError(f"Real path {real} does not exist")
@@ -122,9 +142,8 @@ def remap_symlink(
         if not overwrite:
             raise FileExistsError(f"Fake path {fake} already exists")
         else:
-            if debug:
-                print(f"Fake path {fake} already exists, overwriting")
-            fake.unlink()
+            logging.debug(f"Fake path {fake} already exists, overwriting")
+            fake.unlink()  # should always work because it is a NTFS symlink, which is a file in Linux
     fake.symlink_to(real, target_is_directory=real.is_dir())
 
 
@@ -134,30 +153,49 @@ def symlink_fixer():
     parser = argparse.ArgumentParser(
         description='Remap symlinks from one drive to another.')
     parser.add_argument('symlinks', type=str, help='Path to the symlink file')
+    parser.add_argument('config', type=Path,
+                        help='Path to the configuration TOML file')
     parser.add_argument('--execute', type=bool,
                         help='Apply symlinks', default=False)
-    parser.add_argument('--debug', type=bool, help='Debug mode', default=True)
-
+    parser.add_argument('--debug', type=str,
+                        help='Debug mode [DEBUG | INFO | WARNING | ERROR]', default='WARNING')
+    parser.add_argument('--logfile', type=str,
+                        help='Log file path', default='symlink_fixer.log')
+    # Parse the arguments
     args = parser.parse_args()
     # Check if the symlink file exists
     dry_run = not args.execute
-    debug = args.debug
+    # Set up logging
+    log_file_handle = logging.FileHandler(
+        args.logfile, mode='w', encoding='utf8', errors='surrogateescape')  # log file
+    log_file_handle.setLevel(logging.DEBUG)  # set it to debug and up
+    log_file_handle.setFormatter(log_formatter)
+    root_logger.addHandler(log_file_handle)  # add the log file handler
+    # Set up console logging level
+    if args.debug.upper() == 'DEBUG':
+        stream_handler.setLevel(logging.DEBUG)
+    elif args.debug.upper() == 'INFO':
+        stream_handler.setLevel(logging.INFO)
+    elif args.debug.upper() == 'WARNING':
+        stream_handler.setLevel(logging.WARNING)
+    elif args.debug.upper() == 'ERROR':
+        stream_handler.setLevel(logging.ERROR)
+    else:
+        raise ValueError(f"Unknown debug level: {args.debug}")
     if not os.path.exists(args.symlinks):
         raise FileNotFoundError(f"Symlink file {args.symlinks} does not exist")
+    if not os.path.exists(args.config):
+        raise FileNotFoundError(f"Config file {args.config} does not exist")
+    # Load the configuration
+    config = SymlinkFixerConfig.from_toml(args.config)
 
     reals, fakes = import_symlinks('nipflix_symlinks.txt')
-    drive_map = {
-        'e': Path('/media/jellyfin/Jellyfin'),
-        'f': Path('/media/jellyfin/Jellyfin2'),
-        'g': Path('/media/jellyfin/Jellyfin3'),
-        'h': Path('/media/jellyfin/Jellyfin4'),
-    }
 
-    for real, fake in zip(reals, fakes):
+    for real, fake in tqdm(zip(reals, fakes), total=len(reals), desc='Creating symlinks'):
         try:
-            remap_symlink(real, fake, drive_map, dry_run=dry_run, debug=debug)
+            remap_symlink(real, fake, config.mapping, dry_run=dry_run)
         except Exception as e:
-            print(f"Error: {e}")
+            logging.warning(f"{e}".replace('\n', ' '))  # Log the error without newlines
 
 
 # %%
