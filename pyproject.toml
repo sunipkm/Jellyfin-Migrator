@@ -13,14 +13,14 @@ license = { file = "LICENSE" }
 description = "A tool to migrate Jellyfin data from a Windows server to a Linux server."
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = [
-    "tqdm",
-    "fancy_dataclass",
-]
-scripts = { jellyfin-migrator = "jellyfin_migrator:program_main" }
+dependencies = ["tqdm", "fancy_dataclass"]
+[project.scripts]
+jellyfin-migrator = "jellyfin_migrator:program_main"
+jellyfin-symlink-fixer = "jellyfin_migrator.symlink_fixer:symlink_fixer"
+
 
 [tool.setuptools]
 # https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html
-platforms = ["Windows"]
+platforms = ["Windows", "Linux"]
 include-package-data = true
 zip-safe = true
